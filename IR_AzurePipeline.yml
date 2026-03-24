@@ -1,0 +1,97 @@
+name: Playwright Tests
+
+trigger:
+  - none
+
+parameters:
+  - name: environment
+    displayName: "Test Environment"
+    type: string
+    default: "qa"
+    values:
+      - qa
+      - preprod
+      - prod
+
+# -----------------------------------------------------
+# Only use pipeline variable
+# -----------------------------------------------------
+stages:
+  # ------------------ Stage 1: Build ------------------
+  - stage: Build
+    displayName: "Build"
+    jobs:
+      - job: Build
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: "20.x"
+            displayName: "Install Node.js"
+
+          - script: npm install
+            workingDirectory: Vision_IR_Web
+            displayName: "Install Dependencies"
+
+          - script: npx playwright install --with-deps
+            workingDirectory: Vision_IR_Web
+            displayName: "Install Playwright Browsers"
+
+  # ------------------ Stage 2: Run using pipeline variable ------------------
+  - stage: Run_${{ replace(replace(variables.testFileVariable, '/', '_'), '.', '_') }}
+    displayName: "Run Test from Pipeline Variable: ${{ variables.testFileVariable }}"
+    dependsOn: Build
+    jobs:
+      - job: Run_${{ replace(replace(variables.testFileVariable, '/', '_'), '.', '_') }}
+        displayName: "Execute: ${{ variables.testFileVariable }}"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: "20.x"
+            displayName: "Install Node.js"
+
+          - script: npm install
+            workingDirectory: Vision_IR_Web
+            displayName: "Install Dependencies"
+
+          - script: npx playwright install --with-deps
+            workingDirectory: Vision_IR_Web
+            displayName: "Install Playwright Browsers"
+
+          - script: |
+              echo "Clearing previous test results..."
+              rm -rf Vision_IR_Web/**/junit-results/*.xml
+            displayName: "Clear Previous Test Results"
+
+          - script: |
+              echo "Running test from pipeline variable: $(testFileVariable)"
+              echo "Environment: ${{ parameters.environment }}"
+              export npm_config_ENV=${{ parameters.environment }}
+              export TEST_FILE='$(testFileVariable)'
+              npm run test:mac
+            workingDirectory: Vision_IR_Web
+            displayName: "Execute Playwright Test (Pipeline Variable)"
+
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFiles: '**/junit-results/*.xml'
+              testResultsFormat: 'JUnit'
+              testRunTitle: 'Playwright Test Results - $(testFileVariable)'
+              mergeTestResults: true
+              failTaskOnFailedTests: true
+            condition: succeededOrFailed()
+
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: 'Vision_IR_Web/html-report'
+              artifact: Variable_Test_Report
+            condition: succeededOrFailed()

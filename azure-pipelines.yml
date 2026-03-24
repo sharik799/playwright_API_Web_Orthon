@@ -1,0 +1,170 @@
+name: Playwright Tests
+
+trigger:
+  - none
+
+parameters:
+  - name: environment
+    displayName: "Test Environment"
+    type: string
+    default: "qa"
+    values:
+      - qa
+      - preprod
+      - prod
+
+  - name: testSelection
+    displayName: "Select Test Mode"
+    type: string
+    default: "Select All"
+    values:
+      - "Select All"
+      - "Use Pipeline Variable"
+
+  - name: tests
+    displayName: "Playwright Test Files (used only if 'Select All')"
+    type: object
+    default:
+      - "functional/ProductMdTest/PM_ImportProductsViaExcel_Negative.test.ts"
+      - "functional/ProductMdTest/PM_ImportProductsViaExcel_Positive.test.ts"
+      - "functional/ProductMdTest/PM_ImportRealDataE2E.test.ts"
+
+# --------------------------------
+stages:
+  # ------------------ Stage 1: Build ------------------
+  - stage: Build
+    displayName: "Build"
+    jobs:
+      - job: Build
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: "20.x"
+            displayName: "Install Node.js"
+
+          - script: npm install
+            workingDirectory: Vision_IR_Web
+            displayName: "Install Dependencies"
+
+          - script: npx playwright install --with-deps
+            workingDirectory: Vision_IR_Web
+            displayName: "Install Playwright Browsers"
+
+    # ------------------ Stage 2: Run from Pipeline Variable (if selected) ------------------
+  - ${{ if eq(parameters.testSelection, 'Use Pipeline Variable') }}:
+    - stage: Run_${{ replace(replace(variables.testFileVariable, '/', '_'), '.', '_') }}
+      displayName: "Run Test from Pipeline Variable: ${{ variables.testFileVariable }}"
+      dependsOn: Build
+      jobs:
+        - job: Run_${{ replace(replace(variables.testFileVariable, '/', '_'), '.', '_') }}
+          displayName: "Execute: ${{ variables.testFileVariable }}"
+          pool:
+            vmImage: "ubuntu-latest"
+          steps:
+            - checkout: self
+              displayName: "Checkout Repository"
+
+            - task: NodeTool@0
+              inputs:
+                versionSpec: "20.x"
+              displayName: "Install Node.js"
+
+            - script: npm install
+              workingDirectory: Vision_IR_Web
+              displayName: "Install Dependencies"
+
+            - script: npx playwright install --with-deps
+              workingDirectory: Vision_IR_Web
+              displayName: "Install Playwright Browsers"
+
+            - script: |
+                echo "Clearing previous test results..."
+                rm -rf Vision_IR_Web/**/junit-results/*.xml
+              displayName: "Clear Previous Test Results"
+
+            - script: |
+                echo "Running test from pipeline variable: $(testFileVariable)"
+                echo "Environment: ${{ parameters.environment }}"
+                export npm_config_ENV=${{ parameters.environment }}
+                export TEST_FILE='$(testFileVariable)'
+                npm run test:mac
+              workingDirectory: Vision_IR_Web
+              displayName: "Execute Playwright Test (Variable)"
+
+            - task: PublishTestResults@2
+              inputs:
+                testResultsFiles: '**/junit-results/*.xml'
+                testResultsFormat: 'JUnit'
+                testRunTitle: 'Playwright Test Results - ${{ variables.testFileVariable }}'
+                mergeTestResults: true
+                failTaskOnFailedTests: true
+              condition: succeededOrFailed()
+
+            - task: PublishPipelineArtifact@1
+              inputs:
+                targetPath: 'Vision_IR_Web/html-report'
+                artifact: Variable_Test_Report
+              condition: succeededOrFailed()
+
+  # ------------------ Stage 3: Run All Tests (if Select All) ------------------
+  - ${{ if eq(parameters.testSelection, 'Select All') }}:
+    - ${{ each testFile in parameters.tests }}:
+      - stage: ${{ replace(replace(testFile, '/', '_'), '.', '_') }}
+        displayName: "Run Test: ${{ testFile }}"
+        dependsOn: Build
+        jobs:
+          - job: Run_${{ replace(replace(testFile, '/', '_'), '.', '_') }}
+            pool:
+              vmImage: "ubuntu-latest"
+            steps:
+              - checkout: self
+                displayName: "Checkout Repository"
+
+              - task: NodeTool@0
+                inputs:
+                  versionSpec: "20.x"
+                displayName: "Install Node.js"
+
+              - script: npm install
+                workingDirectory: Vision_IR_Web
+                displayName: "Install Dependencies"
+
+              - script: npx playwright install --with-deps
+                workingDirectory: Vision_IR_Web
+                displayName: "Install Playwright Browsers"
+
+              - script: |
+                  echo "Clearing previous test results..."
+                  rm -rf Vision_IR_Web/**/junit-results/*.xml
+                displayName: "Clear Previous Test Results"
+
+              - script: |
+                  echo "Running test file: ${{ testFile }}"
+                  echo "Running ENV: ${{ parameters.environment }}"
+                  export npm_config_ENV=${{ parameters.environment }}
+                  export TEST_FILE='${{ testFile }}'
+                  npm run test:mac
+                workingDirectory: Vision_IR_Web
+                displayName: "Execute Playwright Test"
+
+              - task: PublishTestResults@2
+                inputs:
+                  testResultsFiles: '**/junit-results/*.xml'
+                  testResultsFormat: 'JUnit'
+                  testRunTitle: 'Playwright Test Results - ${{ testFile }}'
+                  mergeTestResults: true
+                  failTaskOnFailedTests: true
+                condition: succeededOrFailed()
+
+              - task: PublishPipelineArtifact@1
+                inputs:
+                  targetPath: 'Vision_IR_Web/html-report'
+                  artifact: ${{ replace(replace(testFile, '/', '_'), '.', '_') }}_Report
+                condition: succeededOrFailed()
+
+# ------------------ End of Pipeline ------------------
